@@ -33,6 +33,25 @@ python -m pip install -r requirements.txt
 
 ## Daily run (open multiple terminals)
 
+### Option 1 — One command to start all backend services (recommended)
+
+In the project root:
+
+```powershell
+cd "D:\Banking AI Dashboard Design"
+.\backend\run-all.ps1
+```
+
+Stop all:
+
+```powershell
+.\backend\stop-all.ps1
+```
+
+> Note: This starts services as PowerShell background jobs. Keep the terminal open while running.
+
+### Option 2 — Start each backend service in its own terminal
+
 ### Terminal A — Transaction Service (:8002)
 
 ```powershell
