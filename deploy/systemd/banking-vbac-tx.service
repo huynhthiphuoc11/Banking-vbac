@@ -1,0 +1,17 @@
+[Unit]
+Description=Banking-vbac Transaction Service (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=mytam
+WorkingDirectory=/home/mytam/Banking-vbac/backend
+EnvironmentFile=/etc/banking-vbac/tx.env
+ExecStart=/home/mytam/Banking-vbac/backend/.venv/bin/python -m uvicorn transaction_service.app.main:app --host 127.0.0.1 --port 8002
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+
+

@@ -1,0 +1,17 @@
+[Unit]
+Description=Banking-vbac Conversation Service (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=mytam
+WorkingDirectory=/home/mytam/Banking-vbac/backend
+EnvironmentFile=/etc/banking-vbac/conv.env
+ExecStart=/home/mytam/Banking-vbac/backend/.venv/bin/python -m uvicorn conversation_service.app.main:app --host 127.0.0.1 --port 8001
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+
+

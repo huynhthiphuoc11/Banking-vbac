@@ -1,0 +1,17 @@
+[Unit]
+Description=Banking-vbac API Gateway Local (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=mytam
+WorkingDirectory=/home/mytam/Banking-vbac/backend
+EnvironmentFile=/etc/banking-vbac/gateway.env
+ExecStart=/home/mytam/Banking-vbac/backend/.venv/bin/python -m uvicorn api_gateway_local.app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+
+
