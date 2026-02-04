@@ -57,6 +57,20 @@ Optional:
 .\backend\run-backend.ps1 -Background
 ```
 
+If ports `8000/8001/8002` are already "stuck" (old processes you can't easily close),
+you can run on **different ports**:
+
+```powershell
+.\backend\run-backend.ps1 -NoChat -Background -GatewayPort 9000 -TransactionPort 9002
+```
+
+Then start frontend with:
+
+```powershell
+$env:VITE_API_BASE_URL="http://127.0.0.1:9000"
+npm run dev
+```
+
 > If your PowerShell blocks scripts, run once in the current terminal:
 > `Set-ExecutionPolicy -Scope Process Bypass`
 

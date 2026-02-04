@@ -38,15 +38,18 @@ import {
   apiFetch,
   DashboardInsightsRes,
   DashboardRecommendationsRes,
+  DashboardSampleUserRes,
   DashboardSummaryRes,
   DashboardTransaction,
 } from "../services/api";
 
 export function DashboardPage() {
-  const USER_ID = "00017496858921195E5A";
+  const DEFAULT_USER_ID = "00017496858921195E5A";
+  const [userId, setUserId] = React.useState(() => sessionStorage.getItem("vbac:user_id") || DEFAULT_USER_ID);
+  const didFallbackRef = React.useRef(false);
 
   const CACHE_TTL_MS = 2 * 60 * 1000;
-  const cacheKey = (k: string) => `vbac:${USER_ID}:${k}`;
+  const cacheKey = (k: string) => `vbac:${userId}:${k}`;
   const readCache = <T,>(k: string): T | null => {
     try {
       const raw = sessionStorage.getItem(cacheKey(k));
@@ -77,55 +80,95 @@ export function DashboardPage() {
     let cancelled = false;
     setApiError(null);
 
+    const toMsg = (e: unknown) => {
+      if (typeof e === "object" && e && "status" in e && "message" in e) {
+        const err = e as any;
+        const detail =
+          typeof err.detail === "string"
+            ? err.detail
+            : err.detail
+              ? JSON.stringify(err.detail)
+              : "";
+        return `${err.message}${err.status ? ` (HTTP ${err.status})` : ""}${detail ? `: ${detail}` : ""}`;
+      }
+      return "Backend API is unreachable. Start the local gateway on :8000.";
+    };
+
+    const maybeFallbackToSampleUser = async (e: unknown) => {
+      if (didFallbackRef.current) return false;
+      const detailStr =
+        typeof (e as any)?.detail === "string"
+          ? (e as any).detail
+          : (e as any)?.detail
+            ? JSON.stringify((e as any).detail)
+            : "";
+      if (!detailStr.includes("No transactions found for customer")) return false;
+      didFallbackRef.current = true;
+      try {
+        const sample = await apiFetch<DashboardSampleUserRes>("/v1/dashboard/sample-user");
+        if (cancelled) return false;
+        sessionStorage.setItem("vbac:user_id", sample.user_id);
+        setUserId(sample.user_id);
+        setApiError(null);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
     // Fetch independently so the UI updates as soon as each endpoint returns.
-    apiFetch<DashboardSummaryRes>(`/v1/dashboard/users/${USER_ID}/summary?window_days=90`)
+    apiFetch<DashboardSummaryRes>(`/v1/dashboard/users/${userId}/summary?window_days=90`)
       .then((s) => {
         if (cancelled) return;
         setSummaryApi(s);
         writeCache("summary", s);
       })
-      .catch(() => {
+      .catch((e) => {
         if (cancelled) return;
-        setApiError((prev) => prev || "Backend API is unreachable. Start the local gateway on :8000.");
+        maybeFallbackToSampleUser(e);
+        setApiError((prev) => prev || toMsg(e));
       });
 
-    apiFetch<DashboardTransaction[]>(`/v1/dashboard/users/${USER_ID}/transactions?limit=200`)
+    apiFetch<DashboardTransaction[]>(`/v1/dashboard/users/${userId}/transactions?limit=200`)
       .then((txs) => {
         if (cancelled) return;
         setTxApi(txs);
         writeCache("transactions", txs);
       })
-      .catch(() => {
+      .catch((e) => {
         if (cancelled) return;
-        setApiError((prev) => prev || "Backend API is unreachable. Start the local gateway on :8000.");
+        maybeFallbackToSampleUser(e);
+        setApiError((prev) => prev || toMsg(e));
       });
 
-    apiFetch<DashboardInsightsRes>(`/v1/dashboard/users/${USER_ID}/insights?window_days=90`)
+    apiFetch<DashboardInsightsRes>(`/v1/dashboard/users/${userId}/insights?window_days=90`)
       .then((ins) => {
         if (cancelled) return;
         setInsightsApi(ins);
         writeCache("insights", ins);
       })
-      .catch(() => {
+      .catch((e) => {
         if (cancelled) return;
-        setApiError((prev) => prev || "Backend API is unreachable. Start the local gateway on :8000.");
+        maybeFallbackToSampleUser(e);
+        setApiError((prev) => prev || toMsg(e));
       });
 
-    apiFetch<DashboardRecommendationsRes>(`/v1/dashboard/users/${USER_ID}/recommendations?window_days=90`)
+    apiFetch<DashboardRecommendationsRes>(`/v1/dashboard/users/${userId}/recommendations?window_days=90`)
       .then((recs) => {
         if (cancelled) return;
         setRecsApi(recs);
         writeCache("recs", recs);
       })
-      .catch(() => {
+      .catch((e) => {
         if (cancelled) return;
-        setApiError((prev) => prev || "Backend API is unreachable. Start the local gateway on :8000.");
+        maybeFallbackToSampleUser(e);
+        setApiError((prev) => prev || toMsg(e));
       });
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userId]);
 
   const formatMoney = (n: number, currency: string = "EUR") =>
     new Intl.NumberFormat("en-US", { style: "currency", currency }).format(n);

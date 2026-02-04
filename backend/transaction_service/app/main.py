@@ -20,6 +20,7 @@ settings = CommonSettings(service_name="transaction_service")
 configure_logging("transaction_service")
 
 _DB: "duckdb.DuckDBPyConnection | None" = None
+_SAMPLE_USER: dict[str, Any] | None = None
 
 if TYPE_CHECKING:
   import duckdb  # type: ignore
@@ -122,7 +123,10 @@ app.add_middleware(
 app.add_middleware(
   CORSMiddleware,
   allow_origins=[settings.cors_allow_origins],
-  allow_credentials=True,
+  # For local dev we don't rely on cookies; disabling credentials avoids
+  # the invalid combination of `Access-Control-Allow-Origin: *` with
+  # `Access-Control-Allow-Credentials: true` which can break browsers.
+  allow_credentials=False,
   allow_methods=["*"],
   allow_headers=["*"],
 )
@@ -131,6 +135,34 @@ app.add_middleware(
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
   return {"status": "ok", "service": "transaction_service"}
+
+
+@app.get("/v1/banking/sample-user")
+def sample_user(_claims: dict = require_auth(settings)) -> dict[str, Any]:
+  """
+  Return a customerID that definitely exists in the loaded dataset.
+  This makes the demo/dashboard robust even when a hard-coded user id has no data
+  in a particular dataset copy.
+  """
+  global _SAMPLE_USER
+  if _SAMPLE_USER is not None:
+    return _SAMPLE_USER
+
+  con = get_db()
+  q = """
+    SELECT customerID AS user_id,
+           COUNT(*) AS tx_count,
+           MAX(timestamp) AS latest_date
+    FROM transactions
+    GROUP BY customerID
+    ORDER BY tx_count DESC
+    LIMIT 1
+  """
+  rows = _fetch_records(con, q, None)
+  if not rows:
+    raise HTTPException(status_code=500, detail="Dataset appears empty; cannot pick sample user.")
+  _SAMPLE_USER = rows[0]
+  return _SAMPLE_USER
 
 
 class TransactionOut(BaseModel):

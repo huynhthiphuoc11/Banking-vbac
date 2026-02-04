@@ -4,9 +4,10 @@ export type ApiError = {
   detail?: unknown;
 };
 
-// On some Windows setups, `localhost` resolves to IPv6 `::1` first.
-// Our local Uvicorn services bind to 127.0.0.1 by default, so prefer IPv4.
-const DEFAULT_BASE_URL = "http://127.0.0.1:8000";
+// Default to same-origin so dev can use Vite proxy (`/v1` → gateway) and
+// deployments can sit behind a reverse-proxy without hard-coding hosts.
+// Override with `VITE_API_BASE_URL` if needed.
+const DEFAULT_BASE_URL = "";
 
 export function getApiBaseUrl() {
   // Vite exposes env vars on import.meta.env
@@ -134,6 +135,12 @@ export type DashboardRecommendationsRes = {
     why: string[];
     explanation: string;
   }>;
+};
+
+export type DashboardSampleUserRes = {
+  user_id: string;
+  tx_count: number;
+  latest_date: string;
 };
 
 

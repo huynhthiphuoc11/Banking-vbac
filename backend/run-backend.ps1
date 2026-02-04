@@ -1,6 +1,10 @@
 param(
   [switch]$NoChat,
-  [switch]$Background
+  [switch]$Background,
+  [switch]$Reload,
+  [int]$GatewayPort = 8000,
+  [int]$ConversationPort = 8001,
+  [int]$TransactionPort = 8002
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +30,25 @@ if (!(Test-Path $DatasetDir)) {
   exit 1
 }
 
+function Stop-PortListeners([int]$Port) {
+  $procIds = (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+      Select-Object -ExpandProperty OwningProcess -Unique)
+  foreach ($procId in $procIds) {
+    try {
+      $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+      Write-Host "Stopping pid $procId ($($proc.ProcessName)) on port $Port" -ForegroundColor Yellow
+      Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+    } catch {
+      # ignore
+    }
+  }
+}
+
+# Ensure we don't accumulate multiple uvicorn instances on the same ports.
+Stop-PortListeners $GatewayPort
+Stop-PortListeners $ConversationPort
+Stop-PortListeners $TransactionPort
+
 function Start-ServiceWindow([string]$Name, [string]$Command) {
   $title = "Backend - $Name"
   $psCmd = @"
@@ -45,14 +68,20 @@ $Command
 "@)) | Out-Null
 }
 
-# Transaction service (:8002)
-$txCmd = "`$env:DATASET_DIR = '$DatasetDir'; & '$Python' -m uvicorn transaction_service.app.main:app --reload --port 8002"
+# Prefer stability by default (no auto-reloader). Use -Reload if you want hot reload.
+$reloadFlag = ""
+if ($Reload) {
+  $reloadFlag = "--reload"
+}
 
-# Conversation service (:8001) - optional
-$convCmd = "& '$Python' -m uvicorn conversation_service.app.main:app --reload --port 8001"
+# Transaction service
+$txCmd = "`$env:DATASET_DIR = '$DatasetDir'; & '$Python' -m uvicorn transaction_service.app.main:app $reloadFlag --host 127.0.0.1 --port $TransactionPort"
 
-# Gateway (:8000)
-$gwCmd = "& '$Python' -m uvicorn api_gateway_local.app.main:app --reload --port 8000"
+# Conversation service - optional
+$convCmd = "& '$Python' -m uvicorn conversation_service.app.main:app $reloadFlag --host 127.0.0.1 --port $ConversationPort"
+
+# Gateway (BFF) - point it at downstream ports explicitly
+$gwCmd = "`$env:TRANSACTION_SERVICE_URL = 'http://127.0.0.1:$TransactionPort'; `$env:CONVERSATION_SERVICE_URL = 'http://127.0.0.1:$ConversationPort'; & '$Python' -m uvicorn api_gateway_local.app.main:app $reloadFlag --host 127.0.0.1 --port $GatewayPort"
 
 if ($Background) {
   Write-Host "Starting backend as background jobs..." -ForegroundColor Cyan
@@ -63,10 +92,10 @@ if ($Background) {
   Write-Host "Stop jobs: Stop-Job -Name transaction_service,conversation_service,api_gateway_local; Remove-Job *" -ForegroundColor Yellow
 } else {
   Write-Host "Starting backend in separate PowerShell windows..." -ForegroundColor Cyan
-  Start-ServiceWindow "transaction_service (:8002)" $txCmd
-  if (!$NoChat) { Start-ServiceWindow "conversation_service (:8001)" $convCmd }
-  Start-ServiceWindow "api_gateway_local (:8000)" $gwCmd
-  Write-Host "Done. Gateway docs: http://127.0.0.1:8000/docs" -ForegroundColor Green
+  Start-ServiceWindow "transaction_service (:$TransactionPort)" $txCmd
+  if (!$NoChat) { Start-ServiceWindow "conversation_service (:$ConversationPort)" $convCmd }
+  Start-ServiceWindow "api_gateway_local (:$GatewayPort)" $gwCmd
+  Write-Host "Done. Gateway docs: http://127.0.0.1:$GatewayPort/docs" -ForegroundColor Green
 }
 
 

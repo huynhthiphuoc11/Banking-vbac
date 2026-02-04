@@ -42,7 +42,10 @@ app.add_middleware(
 app.add_middleware(
   CORSMiddleware,
   allow_origins=[settings.cors_allow_origins],
-  allow_credentials=True,
+  # For local dev we don't rely on cookies; disabling credentials avoids
+  # the invalid combination of `Access-Control-Allow-Origin: *` with
+  # `Access-Control-Allow-Credentials: true` which can break browsers.
+  allow_credentials=False,
   allow_methods=["*"],
   allow_headers=["*"],
 )
