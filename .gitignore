@@ -1,0 +1,29 @@
+# Frontend
+node_modules/
+dist/
+.vite/
+
+# Env / secrets
+.env
+.env.*
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Python / backend
+backend/.venv/
+backend/**/__pycache__/
+backend/**/*.pyc
+backend/.duckdb/
+
+# Dataset (too large for GitHub; keep instructions + env vars instead)
+dataset/FAR-Trans/*.csv
+
+
