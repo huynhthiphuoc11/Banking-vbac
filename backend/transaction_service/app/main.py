@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 from datetime import date
-from typing import Any, TYPE_CHECKING
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,12 +21,6 @@ from .normalize import map_to_category, synthetic_installment
 settings = CommonSettings(service_name="transaction_service")
 configure_logging("transaction_service")
 
-_DB: "duckdb.DuckDBPyConnection | None" = None
-_SAMPLE_USER: dict[str, Any] | None = None
-
-if TYPE_CHECKING:
-  import duckdb  # type: ignore
-
 
 def dataset_path(filename: str) -> str:
   base = os.environ.get("DATASET_DIR")
@@ -37,12 +33,30 @@ def dataset_path(filename: str) -> str:
   return path
 
 
-def get_db() -> "duckdb.DuckDBPyConnection":
-  """
-  Lazily create and reuse a single DuckDB connection.
+def _duckdb_path_literal(p: str) -> str:
+  # DuckDB works well with forward slashes on Windows; also escape quotes.
+  return p.replace("\\", "/").replace("'", "''")
 
-  This avoids re-reading CSVs and re-creating views on every request which can
-  be slow and memory-hungry (and may trigger OOM on Windows).
+
+def _db_file_path() -> str:
+  override = os.environ.get("DUCKDB_PATH")
+  if override:
+    return override
+  backend_dir = Path(__file__).resolve().parents[3]  # .../backend
+  out_dir = backend_dir / ".duckdb"
+  out_dir.mkdir(parents=True, exist_ok=True)
+  return str(out_dir / "transaction_service.duckdb")
+
+
+@lru_cache(maxsize=1)
+def _ensure_db_loaded() -> str:
+  """
+  Load FAR-Trans CSVs into an on-disk DuckDB database once per service process.
+
+  This avoids:
+  - repeated CSV scans on each request
+  - memory spikes from repeated schema inference
+  - OOM crashes on Windows
   """
   try:
     import duckdb  # type: ignore
@@ -52,59 +66,137 @@ def get_db() -> "duckdb.DuckDBPyConnection":
       "  cd backend && python -m pip install -r requirements.txt"
     ) from e
 
-  global _DB
-  if _DB is not None:
-    return _DB
+  db_path = _db_file_path()
+  con = duckdb.connect(database=db_path)
 
-  # DuckDB can query CSVs directly; keep it simple but reuse the connection.
-  con = duckdb.connect(database=":memory:")
+  # Make memory use more predictable in dev; can override via env.
+  mem_limit = os.environ.get("DUCKDB_MEMORY_LIMIT", "512MB")
   con.execute("SET enable_progress_bar=false;")
-  # Prefer lower peak memory for local dev.
+  con.execute(f"SET memory_limit='{mem_limit}';")
+  # Slightly reduce peak memory on some Windows setups.
   try:
     con.execute("SET preserve_insertion_order=false;")
   except Exception:
     pass
 
-  # NOTE: DuckDB does not support prepared parameters for some DDL statements
-  # (e.g. CREATE VIEW). Inline the file path with minimal escaping.
-  def _sql_path(p: str) -> str:
-    # Normalize Windows paths and escape single quotes for SQL string literal.
-    return p.replace("\\", "/").replace("'", "''")
+  tx_path = _duckdb_path_literal(dataset_path("transactions.csv"))
+  assets_path = _duckdb_path_literal(dataset_path("asset_information.csv"))
+  markets_path = _duckdb_path_literal(dataset_path("markets.csv"))
+  only_customer_id = os.environ.get("TX_ONLY_CUSTOMER_ID")
 
-  tx_csv = _sql_path(dataset_path("transactions.csv"))
-  assets_csv = _sql_path(dataset_path("asset_information.csv"))
-  markets_csv = _sql_path(dataset_path("markets.csv"))
+  def _has_table(name: str) -> bool:
+    return (
+      con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='main' AND table_name=?",
+        [name],
+      ).fetchone()[0]
+      > 0
+    )
 
-  con.execute(
-    f"""
-    CREATE OR REPLACE VIEW transactions AS
-      SELECT * FROM read_csv_auto('{tx_csv}', header=true);
-    """
-  )
-  con.execute(
-    f"""
-    CREATE OR REPLACE VIEW assets AS
-      SELECT * FROM read_csv_auto('{assets_csv}', header=true);
-    """
-  )
-  con.execute(
-    f"""
-    CREATE OR REPLACE VIEW markets AS
-      SELECT * FROM read_csv_auto('{markets_csv}', header=true);
-    """
-  )
-  _DB = con
-  return _DB
+  # IMPORTANT:
+  # - Avoid read_csv_auto() (can OOM due to type inference).
+  # - Persist tables into DuckDB file so we don't redo work per request.
+  if not _has_table("transactions"):
+    con.execute(
+      f"""
+      CREATE TABLE transactions AS
+        SELECT * FROM read_csv(
+          '{tx_path}',
+          header=true,
+          columns={{
+            'customerID': 'VARCHAR',
+            'ISIN': 'VARCHAR',
+            'transactionID': 'BIGINT',
+            'transactionType': 'VARCHAR',
+            'timestamp': 'DATE',
+            'totalValue': 'DOUBLE',
+            'units': 'DOUBLE',
+            'channel': 'VARCHAR',
+            'marketID': 'VARCHAR'
+          }},
+          dateformat='%Y-%m-%d'
+        )
+        {"WHERE customerID = '" + _duckdb_path_literal(only_customer_id) + "'" if only_customer_id else ""};
+      """
+    )
+
+  if not _has_table("assets"):
+    con.execute(
+      f"""
+      CREATE TABLE assets AS
+        SELECT * FROM read_csv(
+          '{assets_path}',
+          header=true,
+          columns={{
+            'ISIN': 'VARCHAR',
+            'assetName': 'VARCHAR',
+            'assetShortName': 'VARCHAR',
+            'assetCategory': 'VARCHAR',
+            'assetSubCategory': 'VARCHAR',
+            'marketID': 'VARCHAR',
+            'sector': 'VARCHAR',
+            'industry': 'VARCHAR',
+            'timestamp': 'DATE'
+          }},
+          dateformat='%Y-%m-%d'
+        );
+      """
+    )
+
+  if not _has_table("markets"):
+    con.execute(
+      f"""
+      CREATE TABLE markets AS
+        SELECT * FROM read_csv(
+          '{markets_path}',
+          header=true,
+          columns={{
+            'exchangeID': 'VARCHAR',
+            'marketID': 'VARCHAR',
+            'name': 'VARCHAR',
+            'description': 'VARCHAR',
+            'country': 'VARCHAR',
+            'tradingDays': 'VARCHAR',
+            'tradingHours': 'VARCHAR',
+            'marketClass': 'VARCHAR'
+          }}
+        );
+      """
+    )
+
+  con.close()
+  return db_path
 
 
-def _fetch_records(con: "duckdb.DuckDBPyConnection", q: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
+def get_db() -> Any:
   """
-  Fetch rows as list-of-dicts without requiring pandas/numpy (DuckDB fetchdf()).
+  Returns a connection for the request.
+
+  We use an on-disk DuckDB database created once at startup to avoid OOM.
   """
+  try:
+    import duckdb  # type: ignore
+  except ModuleNotFoundError as e:
+    raise RuntimeError(
+      "Missing dependency 'duckdb'. Install backend requirements:\n"
+      "  cd backend && python -m pip install -r requirements.txt"
+    ) from e
+
+  db_path = _ensure_db_loaded()
+  con = duckdb.connect(database=db_path, read_only=True)
+  mem_limit = os.environ.get("DUCKDB_MEMORY_LIMIT", "512MB")
+  con.execute("SET enable_progress_bar=false;")
+  con.execute(f"SET memory_limit='{mem_limit}';")
+  return con
+
+
+def _fetch_dicts(con: Any, q: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
   res = con.execute(q, params or [])
   cols = [c[0] for c in (res.description or [])]
-  rows = res.fetchall()
-  return [dict(zip(cols, row)) for row in rows]
+  out: list[dict[str, Any]] = []
+  for row in res.fetchall():
+    out.append({cols[i]: row[i] for i in range(len(cols))})
+  return out
 
 
 app = FastAPI(
@@ -123,10 +215,7 @@ app.add_middleware(
 app.add_middleware(
   CORSMiddleware,
   allow_origins=[settings.cors_allow_origins],
-  # For local dev we don't rely on cookies; disabling credentials avoids
-  # the invalid combination of `Access-Control-Allow-Origin: *` with
-  # `Access-Control-Allow-Credentials: true` which can break browsers.
-  allow_credentials=False,
+  allow_credentials=True,
   allow_methods=["*"],
   allow_headers=["*"],
 )
@@ -137,32 +226,29 @@ def healthz() -> dict[str, str]:
   return {"status": "ok", "service": "transaction_service"}
 
 
-@app.get("/v1/banking/sample-user")
-def sample_user(_claims: dict = require_auth(settings)) -> dict[str, Any]:
-  """
-  Return a customerID that definitely exists in the loaded dataset.
-  This makes the demo/dashboard robust even when a hard-coded user id has no data
-  in a particular dataset copy.
-  """
-  global _SAMPLE_USER
-  if _SAMPLE_USER is not None:
-    return _SAMPLE_USER
+class DebugUserOut(BaseModel):
+  customer_id: str
+  tx_count: int
 
+
+@app.get("/v1/debug/users", response_model=list[DebugUserOut])
+def debug_users(
+  limit: int = Query(default=20, ge=1, le=2000, description="Max number of users to return"),
+) -> list[DebugUserOut]:
+  """
+  Local-dev helper: list customer IDs present in the loaded DuckDB + their tx counts.
+
+  NOTE: This is for local debugging only (not meant for production).
+  """
   con = get_db()
   q = """
-    SELECT customerID AS user_id,
-           COUNT(*) AS tx_count,
-           MAX(timestamp) AS latest_date
+    SELECT customerID AS customer_id, COUNT(*)::BIGINT AS tx_count
     FROM transactions
-    GROUP BY customerID
+    GROUP BY 1
     ORDER BY tx_count DESC
-    LIMIT 1
+    LIMIT ?
   """
-  rows = _fetch_records(con, q, None)
-  if not rows:
-    raise HTTPException(status_code=500, detail="Dataset appears empty; cannot pick sample user.")
-  _SAMPLE_USER = rows[0]
-  return _SAMPLE_USER
+  return _fetch_dicts(con, q, [limit])
 
 
 class TransactionOut(BaseModel):
@@ -217,9 +303,9 @@ def get_transactions(
     ORDER BY t.timestamp DESC
     LIMIT {limit}
   """
-  rows = _fetch_records(con, q, params)
+  rows = _fetch_dicts(con, q, params)
   if not rows:
-    raise HTTPException(status_code=404, detail="No transactions found for customer.")
+    return []
   return rows
 
 
@@ -239,76 +325,102 @@ def user_summary(
   window_days: int = Query(default=90, ge=7, le=365),
   _claims: dict = require_auth(settings),
 ) -> UserSummaryOut:
-  con = get_db()
-  q = """
-    WITH user_tx AS (
-      SELECT *
-      FROM transactions
-      WHERE customerID = ?
-        AND timestamp >= (
-          (SELECT MAX(timestamp) FROM transactions WHERE customerID = ?)
-          - (? || ' days')::INTERVAL
-        )
-    ),
-    enriched AS (
-      SELECT
-        ut.*,
-        a.assetCategory AS asset_category
-      FROM user_tx ut
-      LEFT JOIN (
-        SELECT DISTINCT ON (ISIN) ISIN, assetCategory
-        FROM assets
-      ) a USING (ISIN)
-    )
-    SELECT
-      SUM(CASE WHEN transactionType='Buy' THEN totalValue ELSE 0 END) AS buys,
-      SUM(CASE WHEN transactionType='Sell' THEN totalValue ELSE 0 END) AS sells,
-      (SUM(CASE WHEN transactionType='Sell' THEN totalValue ELSE 0 END)
-       - SUM(CASE WHEN transactionType='Buy' THEN totalValue ELSE 0 END)) AS net_flow,
-      COUNT(*) AS tx_count
-    FROM enriched;
   """
-  buys, sells, net_flow, tx_count = con.execute(q, [customer_id, customer_id, window_days]).fetchone()
-  if tx_count == 0:
-    raise HTTPException(status_code=404, detail="No transactions in this window for customer.")
-
-  q2 = """
-    WITH user_tx AS (
-      SELECT *
-      FROM transactions
-      WHERE customerID = ?
-        AND timestamp >= (
-          (SELECT MAX(timestamp) FROM transactions WHERE customerID = ?)
-          - (? || ' days')::INTERVAL
-        )
-    ),
-    enriched AS (
-      SELECT
-        ut.*,
-        COALESCE(a.assetCategory, 'Unknown') AS asset_category
-      FROM user_tx ut
-      LEFT JOIN (
-        SELECT DISTINCT ON (ISIN) ISIN, assetCategory
-        FROM assets
-      ) a USING (ISIN)
-    )
-    SELECT asset_category, COUNT(*) AS n, SUM(totalValue) AS total_value
-    FROM enriched
-    GROUP BY 1
-    ORDER BY total_value DESC
-    LIMIT 5;
+  NOTE: This endpoint is debugged in local dev by surfacing the real error message.
+  In production you would not return raw exception details.
   """
-  top = _fetch_records(con, q2, [customer_id, customer_id, window_days])
+  from fastapi import HTTPException
+  import traceback
 
-  return UserSummaryOut(
-    customer_id=customer_id,
-    window_days=window_days,
-    buys=float(buys or 0),
-    sells=float(sells or 0),
-    net_flow=float(net_flow or 0),
-    tx_count=int(tx_count),
-    top_asset_categories=top,
-  )
+  try:
+    con = get_db()
+    q = """
+      WITH anchor AS (
+        SELECT MAX(CAST(timestamp AS DATE)) AS as_of
+        FROM transactions
+        WHERE customerID = ?
+      ),
+      user_tx AS (
+        SELECT t.*
+        FROM transactions t, anchor a
+        WHERE t.customerID = ?
+          AND a.as_of IS NOT NULL
+          AND CAST(t.timestamp AS DATE) >= (a.as_of - (? || ' days')::INTERVAL)
+      ),
+      enriched AS (
+        SELECT
+          ut.*,
+          a.assetCategory AS asset_category
+        FROM user_tx ut
+        LEFT JOIN (
+          SELECT DISTINCT ON (ISIN) ISIN, assetCategory
+          FROM assets
+        ) a USING (ISIN)
+      )
+      SELECT
+        SUM(CASE WHEN transactionType='Buy' THEN totalValue ELSE 0 END) AS buys,
+        SUM(CASE WHEN transactionType='Sell' THEN totalValue ELSE 0 END) AS sells,
+        (SUM(CASE WHEN transactionType='Sell' THEN totalValue ELSE 0 END)
+         - SUM(CASE WHEN transactionType='Buy' THEN totalValue ELSE 0 END)) AS net_flow,
+        COUNT(*) AS tx_count
+      FROM enriched;
+    """
+    buys, sells, net_flow, tx_count = con.execute(q, [customer_id, customer_id, window_days]).fetchone()
+    if tx_count == 0:
+      return UserSummaryOut(
+        customer_id=customer_id,
+        window_days=window_days,
+        buys=0.0,
+        sells=0.0,
+        net_flow=0.0,
+        tx_count=0,
+        top_asset_categories=[],
+      )
+
+    q2 = """
+      WITH anchor AS (
+        SELECT MAX(CAST(timestamp AS DATE)) AS as_of
+        FROM transactions
+        WHERE customerID = ?
+      ),
+      user_tx AS (
+        SELECT t.*
+        FROM transactions t, anchor a
+        WHERE t.customerID = ?
+          AND a.as_of IS NOT NULL
+          AND CAST(t.timestamp AS DATE) >= (a.as_of - (? || ' days')::INTERVAL)
+      ),
+      enriched AS (
+        SELECT
+          ut.*,
+          COALESCE(a.assetCategory, 'Unknown') AS asset_category
+        FROM user_tx ut
+        LEFT JOIN (
+          SELECT DISTINCT ON (ISIN) ISIN, assetCategory
+          FROM assets
+        ) a USING (ISIN)
+      )
+      SELECT asset_category, COUNT(*) AS n, SUM(totalValue) AS total_value
+      FROM enriched
+      GROUP BY 1
+      ORDER BY total_value DESC
+      LIMIT 5;
+    """
+    top = _fetch_dicts(con, q2, [customer_id, customer_id, window_days])
+
+    return UserSummaryOut(
+      customer_id=customer_id,
+      window_days=window_days,
+      buys=float(buys or 0),
+      sells=float(sells or 0),
+      net_flow=float(net_flow or 0),
+      tx_count=int(tx_count),
+      top_asset_categories=top,
+    )
+  except Exception as e:  # pragma: no cover - local debug helper
+    # In local dev, surface the real error so we can fix it.
+    traceback.print_exc()
+    raise HTTPException(status_code=500, detail=f"user_summary error: {e}")
 
 
 class InstallmentOut(BaseModel):
@@ -374,9 +486,9 @@ def get_banking_transactions(
     ORDER BY t.timestamp DESC
     LIMIT {limit}
   """
-  rows = _fetch_records(con, q, params)
+  rows = _fetch_dicts(con, q, params)
   if not rows:
-    raise HTTPException(status_code=404, detail="No transactions found for customer.")
+    return []
 
   out: list[BankingTransactionOut] = []
   for row in rows:
@@ -423,14 +535,21 @@ def banking_summary(
 ) -> BankingSummaryOut:
   # Reuse normalized transactions to compute category and installment features.
   txs = get_banking_transactions(customer_id=customer_id, limit=2000, start=None, end=None, _claims=_claims)
-  # Filter window in python (timestamps are date objects). FAR-Trans is historical,
-  # so use the most recent transaction date as the "now" anchor.
+  # Filter window in python (timestamps are date objects)
   from datetime import timedelta
-  anchor = max((t.posted_at for t in txs), default=date.today())
-  cutoff = anchor - timedelta(days=window_days)
+  as_of = max((t.posted_at for t in txs), default=date.today())
+  cutoff = as_of - timedelta(days=window_days)
   txs = [t for t in txs if t.posted_at >= cutoff]
   if not txs:
-    raise HTTPException(status_code=404, detail="No transactions in this window for customer.")
+    return BankingSummaryOut(
+      user_id=customer_id,
+      window_days=window_days,
+      spend_total=0.0,
+      income_total=0.0,
+      tx_count=0,
+      installment_ratio=0.0,
+      top_categories=[],
+    )
 
   debit = [t for t in txs if t.direction == "debit"]
   credit = [t for t in txs if t.direction == "credit"]

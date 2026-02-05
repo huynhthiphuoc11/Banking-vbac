@@ -4,6 +4,7 @@ import { LoginPage } from "./pages/login-page";
 import { DashboardPage } from "./pages/dashboard-page";
 import { ChatPage } from "./pages/chat-page";
 import { PlaceholderPage } from "./pages/placeholder-page";
+import { TransactionsPage } from "./pages/transactions-page";
 
 export default function App() {
   return (
@@ -12,10 +13,7 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/chat" element={<ChatPage />} />
-        <Route
-          path="/transactions"
-          element={<PlaceholderPage title="Transactions" description="Coming soon." />}
-        />
+        <Route path="/transactions" element={<TransactionsPage />} />
         <Route
           path="/card-activities"
           element={<PlaceholderPage title="Card Activities" description="Coming soon." />}

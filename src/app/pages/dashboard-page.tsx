@@ -12,7 +12,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Calendar, Car, ChevronDown, Droplet, Dumbbell, HelpCircle, Home, Landmark, Plus } from "lucide-react";
+import { Calendar, ChevronDown, Plus, Droplets, Dumbbell, CarFront, Home, PiggyBank } from "lucide-react";
 
 import { SparkleShell } from "../components/layout/sparkle-shell";
 import { Button } from "../components/ui/button";
@@ -34,141 +34,449 @@ import {
   TableRow,
 } from "../components/ui/table";
 import { cn } from "../components/ui/utils";
-import {
-  apiFetch,
-  DashboardInsightsRes,
-  DashboardRecommendationsRes,
-  DashboardSampleUserRes,
-  DashboardSummaryRes,
-  DashboardTransaction,
-} from "../services/api";
+import { DashboardInsightsRes, DashboardRecommendationsRes, DashboardSummaryRes, DashboardTransaction } from "../services/api";
 
 export function DashboardPage() {
-  const DEFAULT_USER_ID = "00017496858921195E5A";
-  const [userId, setUserId] = React.useState(() => sessionStorage.getItem("vbac:user_id") || DEFAULT_USER_ID);
-  const didFallbackRef = React.useRef(false);
+  const USER_ID = "00017496858921195E5A";
 
-  const CACHE_TTL_MS = 2 * 60 * 1000;
-  const cacheKey = (k: string) => `vbac:${userId}:${k}`;
-  const readCache = <T,>(k: string): T | null => {
-    try {
-      const raw = sessionStorage.getItem(cacheKey(k));
-      if (!raw) return null;
-      const parsed = JSON.parse(raw) as { ts: number; data: T };
-      if (!parsed?.ts) return null;
-      if (Date.now() - parsed.ts > CACHE_TTL_MS) return null;
-      return parsed.data ?? null;
-    } catch {
-      return null;
-    }
-  };
-  const writeCache = (k: string, data: unknown) => {
-    try {
-      sessionStorage.setItem(cacheKey(k), JSON.stringify({ ts: Date.now(), data }));
-    } catch {
-      // ignore
-    }
-  };
+  const [summaryApi, setSummaryApi] = React.useState<DashboardSummaryRes | null>(null);
+  const [txApi, setTxApi] = React.useState<DashboardTransaction[]>([]);
+  const [insightsApi, setInsightsApi] = React.useState<DashboardInsightsRes | null>(null);
+  const [recsApi, setRecsApi] = React.useState<DashboardRecommendationsRes | null>(null);
 
-  const [summaryApi, setSummaryApi] = React.useState<DashboardSummaryRes | null>(() => readCache("summary"));
-  const [txApi, setTxApi] = React.useState<DashboardTransaction[]>(() => readCache("transactions") ?? []);
-  const [insightsApi, setInsightsApi] = React.useState<DashboardInsightsRes | null>(() => readCache("insights"));
-  const [recsApi, setRecsApi] = React.useState<DashboardRecommendationsRes | null>(() => readCache("recs"));
-  const [apiError, setApiError] = React.useState<string | null>(null);
-
+  // Use fixed mock data for local UI demo (no backend required)
   React.useEffect(() => {
-    let cancelled = false;
-    setApiError(null);
-
-    const toMsg = (e: unknown) => {
-      if (typeof e === "object" && e && "status" in e && "message" in e) {
-        const err = e as any;
-        const detail =
-          typeof err.detail === "string"
-            ? err.detail
-            : err.detail
-              ? JSON.stringify(err.detail)
-              : "";
-        return `${err.message}${err.status ? ` (HTTP ${err.status})` : ""}${detail ? `: ${detail}` : ""}`;
-      }
-      return "Backend API is unreachable. Start the local gateway on :8000.";
+    const mockSummary: DashboardSummaryRes = {
+      user_id: USER_ID,
+      window_days: 90,
+      spend_total: 18450.25,
+      income_total: 32500,
+      tx_count: 68,
+      installment_ratio: 0.36,
+      top_categories: [
+        { category: "Shopping", total: 7200 },
+        { category: "Travel", total: 4200 },
+        { category: "Groceries", total: 2800 },
+        { category: "Bills & Utilities", total: 1800 },
+        { category: "Dining", total: 1450.25 },
+      ],
     };
 
-    const maybeFallbackToSampleUser = async (e: unknown) => {
-      if (didFallbackRef.current) return false;
-      const detailStr =
-        typeof (e as any)?.detail === "string"
-          ? (e as any).detail
-          : (e as any)?.detail
-            ? JSON.stringify((e as any).detail)
-            : "";
-      if (!detailStr.includes("No transactions found for customer")) return false;
-      didFallbackRef.current = true;
-      try {
-        const sample = await apiFetch<DashboardSampleUserRes>("/v1/dashboard/sample-user");
-        if (cancelled) return false;
-        sessionStorage.setItem("vbac:user_id", sample.user_id);
-        setUserId(sample.user_id);
-        setApiError(null);
-        return true;
-      } catch {
-        return false;
-      }
+    const mockTx: DashboardTransaction[] = [
+      // January – income and fixed expenses
+      {
+        id: "TX-1001",
+        user_id: USER_ID,
+        posted_at: "2025-01-01",
+        direction: "credit",
+        amount: 3200,
+        currency: "EUR",
+        merchant_name: "January Salary",
+        channel: "Transfer",
+        category: "Income",
+        mcc: 6012,
+        isin: "ISIN0001",
+        installment: null,
+      },
+      {
+        id: "TX-1002",
+        user_id: USER_ID,
+        posted_at: "2025-01-02",
+        direction: "debit",
+        amount: -980,
+        currency: "EUR",
+        merchant_name: "City Apartments",
+        channel: "Transfer",
+        category: "Housing",
+        mcc: 6513,
+        isin: "ISIN0002",
+        installment: null,
+      },
+      {
+        id: "TX-1003",
+        user_id: USER_ID,
+        posted_at: "2025-01-03",
+        direction: "debit",
+        amount: -86.4,
+        currency: "EUR",
+        merchant_name: "Supermarket",
+        channel: "POS",
+        category: "Groceries",
+        mcc: 5411,
+        isin: "ISIN0003",
+        installment: null,
+      },
+      {
+        id: "TX-1004",
+        user_id: USER_ID,
+        posted_at: "2025-01-04",
+        direction: "debit",
+        amount: -45.9,
+        currency: "EUR",
+        merchant_name: "Electricity Bill",
+        channel: "Online",
+        category: "Bills & Utilities",
+        mcc: 4900,
+        isin: "ISIN0004",
+        installment: null,
+      },
+      {
+        id: "TX-1005",
+        user_id: USER_ID,
+        posted_at: "2025-01-05",
+        direction: "debit",
+        amount: -19.99,
+        currency: "EUR",
+        merchant_name: "Spotify",
+        channel: "Card on file",
+        category: "Entertainment",
+        mcc: 4899,
+        isin: "ISIN0005",
+        installment: null,
+      },
+      {
+        id: "TX-1006",
+        user_id: USER_ID,
+        posted_at: "2025-01-06",
+        direction: "debit",
+        amount: -560.75,
+        currency: "EUR",
+        merchant_name: "Airline Ticket",
+        channel: "Online",
+        category: "Travel",
+        mcc: 4511,
+        isin: "ISIN0006",
+        installment: {
+          is_installment: true,
+          months: 6,
+          monthly_amount: 95,
+        },
+      },
+      {
+        id: "TX-1007",
+        user_id: USER_ID,
+        posted_at: "2025-01-08",
+        direction: "debit",
+        amount: -32.15,
+        currency: "EUR",
+        merchant_name: "Coffee Shop",
+        channel: "POS",
+        category: "Dining",
+        mcc: 5812,
+        isin: "ISIN0007",
+        installment: null,
+      },
+      {
+        id: "TX-1008",
+        user_id: USER_ID,
+        posted_at: "2025-01-10",
+        direction: "debit",
+        amount: -240.3,
+        currency: "EUR",
+        merchant_name: "Zara",
+        channel: "POS",
+        category: "Shopping",
+        mcc: 5651,
+        isin: "ISIN0008",
+        installment: null,
+      },
+      // Mid‑month transfers & savings
+      {
+        id: "TX-1009",
+        user_id: USER_ID,
+        posted_at: "2025-01-15",
+        direction: "debit",
+        amount: -300,
+        currency: "EUR",
+        merchant_name: "Auto Savings",
+        channel: "Transfer",
+        category: "Savings",
+        mcc: 6011,
+        isin: "ISIN0009",
+        installment: null,
+      },
+      {
+        id: "TX-1010",
+        user_id: USER_ID,
+        posted_at: "2025-01-18",
+        direction: "credit",
+        amount: 150,
+        currency: "EUR",
+        merchant_name: "Refund - Airline",
+        channel: "Transfer",
+        category: "Refund",
+        mcc: 4511,
+        isin: "ISIN0010",
+        installment: null,
+      },
+      // February – repeat salary & expenses
+      {
+        id: "TX-1011",
+        user_id: USER_ID,
+        posted_at: "2025-02-01",
+        direction: "credit",
+        amount: 3220,
+        currency: "EUR",
+        merchant_name: "February Salary",
+        channel: "Transfer",
+        category: "Income",
+        mcc: 6012,
+        isin: "ISIN0011",
+        installment: null,
+      },
+      {
+        id: "TX-1012",
+        user_id: USER_ID,
+        posted_at: "2025-02-02",
+        direction: "debit",
+        amount: -980,
+        currency: "EUR",
+        merchant_name: "City Apartments",
+        channel: "Transfer",
+        category: "Housing",
+        mcc: 6513,
+        isin: "ISIN0012",
+        installment: null,
+      },
+      {
+        id: "TX-1013",
+        user_id: USER_ID,
+        posted_at: "2025-02-03",
+        direction: "debit",
+        amount: -92.3,
+        currency: "EUR",
+        merchant_name: "Supermarket",
+        channel: "POS",
+        category: "Groceries",
+        mcc: 5411,
+        isin: "ISIN0013",
+        installment: null,
+      },
+      {
+        id: "TX-1014",
+        user_id: USER_ID,
+        posted_at: "2025-02-05",
+        direction: "debit",
+        amount: -48.7,
+        currency: "EUR",
+        merchant_name: "Gas & Heating",
+        channel: "Online",
+        category: "Bills & Utilities",
+        mcc: 4900,
+        isin: "ISIN0014",
+        installment: null,
+      },
+      {
+        id: "TX-1015",
+        user_id: USER_ID,
+        posted_at: "2025-02-07",
+        direction: "debit",
+        amount: -27.5,
+        currency: "EUR",
+        merchant_name: "Gym Membership",
+        channel: "Card on file",
+        category: "Health & Fitness",
+        mcc: 7997,
+        isin: "ISIN0015",
+        installment: null,
+      },
+      {
+        id: "TX-1016",
+        user_id: USER_ID,
+        posted_at: "2025-02-10",
+        direction: "debit",
+        amount: -210.9,
+        currency: "EUR",
+        merchant_name: "IKEA",
+        channel: "POS",
+        category: "Shopping",
+        mcc: 5712,
+        isin: "ISIN0016",
+        installment: null,
+      },
+      {
+        id: "TX-1017",
+        user_id: USER_ID,
+        posted_at: "2025-02-14",
+        direction: "debit",
+        amount: -65.2,
+        currency: "EUR",
+        merchant_name: "Restaurant Date",
+        channel: "POS",
+        category: "Dining",
+        mcc: 5812,
+        isin: "ISIN0017",
+        installment: null,
+      },
+      {
+        id: "TX-1018",
+        user_id: USER_ID,
+        posted_at: "2025-02-20",
+        direction: "debit",
+        amount: -300,
+        currency: "EUR",
+        merchant_name: "Auto Savings",
+        channel: "Transfer",
+        category: "Savings",
+        mcc: 6011,
+        isin: "ISIN0018",
+        installment: null,
+      },
+      // March – more everyday spend
+      {
+        id: "TX-1019",
+        user_id: USER_ID,
+        posted_at: "2025-03-01",
+        direction: "credit",
+        amount: 3250,
+        currency: "EUR",
+        merchant_name: "March Salary",
+        channel: "Transfer",
+        category: "Income",
+        mcc: 6012,
+        isin: "ISIN0019",
+        installment: null,
+      },
+      {
+        id: "TX-1020",
+        user_id: USER_ID,
+        posted_at: "2025-03-02",
+        direction: "debit",
+        amount: -980,
+        currency: "EUR",
+        merchant_name: "City Apartments",
+        channel: "Transfer",
+        category: "Housing",
+        mcc: 6513,
+        isin: "ISIN0020",
+        installment: null,
+      },
+      {
+        id: "TX-1021",
+        user_id: USER_ID,
+        posted_at: "2025-03-03",
+        direction: "debit",
+        amount: -102.6,
+        currency: "EUR",
+        merchant_name: "Supermarket",
+        channel: "POS",
+        category: "Groceries",
+        mcc: 5411,
+        isin: "ISIN0021",
+        installment: null,
+      },
+      {
+        id: "TX-1022",
+        user_id: USER_ID,
+        posted_at: "2025-03-05",
+        direction: "debit",
+        amount: -39.4,
+        currency: "EUR",
+        merchant_name: "Water Bill",
+        channel: "Online",
+        category: "Bills & Utilities",
+        mcc: 4900,
+        isin: "ISIN0022",
+        installment: null,
+      },
+      {
+        id: "TX-1023",
+        user_id: USER_ID,
+        posted_at: "2025-03-08",
+        direction: "debit",
+        amount: -55.9,
+        currency: "EUR",
+        merchant_name: "Gas Station",
+        channel: "POS",
+        category: "Transport",
+        mcc: 5541,
+        isin: "ISIN0023",
+        installment: null,
+      },
+      {
+        id: "TX-1024",
+        user_id: USER_ID,
+        posted_at: "2025-03-10",
+        direction: "debit",
+        amount: -300,
+        currency: "EUR",
+        merchant_name: "Auto Savings",
+        channel: "Transfer",
+        category: "Savings",
+        mcc: 6011,
+        isin: "ISIN0024",
+        installment: null,
+      },
+      {
+        id: "TX-1025",
+        user_id: USER_ID,
+        posted_at: "2025-03-12",
+        direction: "debit",
+        amount: -88.3,
+        currency: "EUR",
+        merchant_name: "Online Shopping",
+        channel: "Online",
+        category: "Shopping",
+        mcc: 5311,
+        isin: "ISIN0025",
+        installment: null,
+      },
+    ];
+
+    const mockInsights: DashboardInsightsRes = {
+      user_id: USER_ID,
+      window_days: 90,
+      insights: [
+        {
+          level: "high",
+          title: "Spend concentration detected",
+          description: "Your spend is concentrated in **Shopping** over the last 90 days.",
+          impact: "Consider setting a category budget for Shopping.",
+          why: ["High share in Shopping", "Consistent pattern in recent transactions"],
+        },
+        {
+          level: "warning",
+          title: "High installment usage",
+          description: "Installment ratio is **32%** of your spending.",
+          impact: "Try to reduce installments below 30% for healthier cashflow.",
+          why: ["Multiple installment transactions"],
+        },
+        {
+          level: "stable",
+          title: "Healthy income to spend ratio",
+          description: "You keep more than 40% of your income after expenses.",
+          impact: "You have room to increase savings or investments.",
+          why: ["Positive net cashflow in the last 3 months"],
+        },
+      ],
     };
 
-    // Fetch independently so the UI updates as soon as each endpoint returns.
-    apiFetch<DashboardSummaryRes>(`/v1/dashboard/users/${userId}/summary?window_days=90`)
-      .then((s) => {
-        if (cancelled) return;
-        setSummaryApi(s);
-        writeCache("summary", s);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        maybeFallbackToSampleUser(e);
-        setApiError((prev) => prev || toMsg(e));
-      });
-
-    apiFetch<DashboardTransaction[]>(`/v1/dashboard/users/${userId}/transactions?limit=200`)
-      .then((txs) => {
-        if (cancelled) return;
-        setTxApi(txs);
-        writeCache("transactions", txs);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        maybeFallbackToSampleUser(e);
-        setApiError((prev) => prev || toMsg(e));
-      });
-
-    apiFetch<DashboardInsightsRes>(`/v1/dashboard/users/${userId}/insights?window_days=90`)
-      .then((ins) => {
-        if (cancelled) return;
-        setInsightsApi(ins);
-        writeCache("insights", ins);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        maybeFallbackToSampleUser(e);
-        setApiError((prev) => prev || toMsg(e));
-      });
-
-    apiFetch<DashboardRecommendationsRes>(`/v1/dashboard/users/${userId}/recommendations?window_days=90`)
-      .then((recs) => {
-        if (cancelled) return;
-        setRecsApi(recs);
-        writeCache("recs", recs);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        maybeFallbackToSampleUser(e);
-        setApiError((prev) => prev || toMsg(e));
-      });
-
-    return () => {
-      cancelled = true;
+    const mockRecs: DashboardRecommendationsRes = {
+      user_id: USER_ID,
+      window_days: 90,
+      recommendations: [
+        {
+          product: "Rewards Credit Card",
+          type: "credit_card",
+          match: 0.86,
+          why: ["High spend in Shopping", "Better cashback on e‑commerce"],
+          explanation: "Maximize rewards on your dominant spend category.",
+        },
+        {
+          product: "Smart Saver Plan",
+          type: "saving",
+          match: 0.75,
+          why: ["Stable income", "Room to automate monthly savings"],
+          explanation: "Automated saving helps build a safety buffer.",
+        },
+      ],
     };
-  }, [userId]);
+
+    setSummaryApi(mockSummary);
+    setTxApi(mockTx);
+    setInsightsApi(mockInsights);
+    setRecsApi(mockRecs);
+  }, [USER_ID]);
 
   const formatMoney = (n: number, currency: string = "EUR") =>
     new Intl.NumberFormat("en-US", { style: "currency", currency }).format(n);
@@ -220,22 +528,37 @@ export function DashboardPage() {
   }, [txApi]);
 
   const activities = [
-    { name: "Water Bill", amount: "-$226", tone: "bad" as const },
-    { name: "Gym & Fitness", amount: "-$50", tone: "bad" as const },
-    { name: "Car Purchase", amount: "-$196,632", tone: "bad" as const },
-    { name: "Home Rent", amount: "-$50", tone: "bad" as const },
-    { name: "Bank Deposit", amount: "+$995,9074", tone: "good" as const },
+    {
+      name: "Water Bill",
+      amount: "-$226",
+      tone: "bad" as const,
+      icon: <Droplets className="h-4 w-4 text-[#4C6FFF]" />,
+    },
+    {
+      name: "Gym & Fitness",
+      amount: "-$50",
+      tone: "bad" as const,
+      icon: <Dumbbell className="h-4 w-4 text-[#FF6B6B]" />,
+    },
+    {
+      name: "Car Purchase",
+      amount: "-$196,632",
+      tone: "bad" as const,
+      icon: <CarFront className="h-4 w-4 text-[#F97316]" />,
+    },
+    {
+      name: "Home Rent",
+      amount: "-$50",
+      tone: "bad" as const,
+      icon: <Home className="h-4 w-4 text-[#A855F7]" />,
+    },
+    {
+      name: "Bank Deposit",
+      amount: "+$995,9074",
+      tone: "good" as const,
+      icon: <PiggyBank className="h-4 w-4 text-[#16A34A]" />,
+    },
   ];
-
-  const activityIconFor = (name: string) => {
-    const n = name.toLowerCase();
-    if (n.includes("water")) return Droplet;
-    if (n.includes("gym") || n.includes("fitness")) return Dumbbell;
-    if (n.includes("car")) return Car;
-    if (n.includes("rent") || n.includes("home")) return Home;
-    if (n.includes("deposit") || n.includes("bank")) return Landmark;
-    return HelpCircle;
-  };
 
   const transactions = React.useMemo(() => {
     if (!txApi.length) {
@@ -281,11 +604,6 @@ export function DashboardPage() {
 
   return (
     <SparkleShell greeting="Good Evening Julie.">
-      {apiError && (
-        <div className="mb-4 rounded-2xl border border-[#EEF1F6] bg-[#FFF8E8] px-4 py-3 text-sm text-[#6B7383]">
-          {apiError}
-        </div>
-      )}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_380px]">
         {/* Left column */}
         <div className="space-y-6">
@@ -499,25 +817,9 @@ export function DashboardPage() {
                 <div className="mt-3 divide-y divide-[#EEF1F6] rounded-2xl border border-[#EEF1F6]">
                   {activities.map((a) => (
                     <div key={a.name} className="flex items-center gap-3 px-4 py-3">
-                      {(() => {
-                        const Icon = activityIconFor(a.name);
-                        return (
-                          <div
-                            className={cn(
-                              "grid h-9 w-9 place-items-center rounded-xl",
-                              a.tone === "good" ? "bg-[#F3FFFB]" : "bg-[#F7F9FF]",
-                            )}
-                          >
-                            <Icon
-                              className={cn(
-                                "h-4 w-4",
-                                a.tone === "good" ? "text-[#39D6B0]" : "text-[#6B7383]",
-                              )}
-                              strokeWidth={2.25}
-                            />
-                          </div>
-                        );
-                      })()}
+                      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#F7F9FF]">
+                        {a.icon}
+                      </div>
                       <div className="flex-1 text-sm font-medium text-[#6B7383]">
                         {a.name}
                       </div>

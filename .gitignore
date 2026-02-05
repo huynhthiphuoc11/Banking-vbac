@@ -1,29 +1,32 @@
-# Frontend
 node_modules/
 dist/
-.vite/
+.DS_Store
 
-# Env / secrets
+# Local env & secrets
 .env
-.env.*
+backend/.env
+*.log
 
-# Logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# OS
-Thumbs.db
-Desktop.ini
-
-# Python / backend
+# Python virtual env
 backend/.venv/
-backend/**/__pycache__/
-backend/**/*.pyc
-backend/.duckdb/
 
-# Dataset (too large for GitHub; keep instructions + env vars instead)
-dataset/FAR-Trans/*.csv
+# Python cache
+__pycache__/
+backend/**/__pycache__/
+*.py[cod]
+
+# Local DuckDB files
+backend/.duckdb/
+backend/**/.duckdb/
+
+# Large sample datasets (keep only env.example + README)
+dataset/
+
+# Editor / OS junk
+*.swp
+*.swo
+Thumbs.db
+.vscode/
+.idea/
 
 

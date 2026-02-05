@@ -4,10 +4,7 @@ export type ApiError = {
   detail?: unknown;
 };
 
-// Default to same-origin so dev can use Vite proxy (`/v1` → gateway) and
-// deployments can sit behind a reverse-proxy without hard-coding hosts.
-// Override with `VITE_API_BASE_URL` if needed.
-const DEFAULT_BASE_URL = "";
+const DEFAULT_BASE_URL = "http://localhost:8000";
 
 export function getApiBaseUrl() {
   // Vite exposes env vars on import.meta.env
@@ -47,9 +44,7 @@ export async function apiFetch<T>(
       ...init,
       signal: controller.signal,
       headers: {
-        // Only set JSON content-type when sending a body; setting it for GET
-        // triggers CORS preflight in browsers.
-        ...(init?.body ? { "content-type": "application/json" } : {}),
+        "content-type": "application/json",
         ...(init?.headers || {}),
       },
     });
@@ -135,12 +130,6 @@ export type DashboardRecommendationsRes = {
     why: string[];
     explanation: string;
   }>;
-};
-
-export type DashboardSampleUserRes = {
-  user_id: string;
-  tx_count: number;
-  latest_date: string;
 };
 
 

@@ -17,17 +17,6 @@ export default defineConfig({
     },
   },
 
-  // In dev, proxy API calls to the local gateway to avoid cross-origin issues
-  // and "localhost/127.0.0.1" quirks across environments.
-  server: {
-    proxy: {
-      "/v1": {
-        target: "http://127.0.0.1:8000",
-        changeOrigin: true,
-      },
-    },
-  },
-
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
 })

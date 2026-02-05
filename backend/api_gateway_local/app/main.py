@@ -17,9 +17,8 @@ from common.settings import CommonSettings
 settings = CommonSettings(service_name="api_gateway_local")
 configure_logging("api_gateway_local")
 
-# Default to 127.0.0.1 to avoid IPv6/localhost resolution issues on Windows.
-TX_URL = os.environ.get("TRANSACTION_SERVICE_URL", "http://127.0.0.1:8002")
-CONV_URL = os.environ.get("CONVERSATION_SERVICE_URL", "http://127.0.0.1:8001")
+TX_URL = os.environ.get("TRANSACTION_SERVICE_URL", "http://localhost:8002")
+CONV_URL = os.environ.get("CONVERSATION_SERVICE_URL", "http://localhost:8001")
 
 
 app = FastAPI(
@@ -38,10 +37,7 @@ app.add_middleware(
 app.add_middleware(
   CORSMiddleware,
   allow_origins=[settings.cors_allow_origins],
-  # For local dev we don't rely on cookies; disabling credentials avoids
-  # the invalid combination of `Access-Control-Allow-Origin: *` with
-  # `Access-Control-Allow-Credentials: true` which can break browsers.
-  allow_credentials=False,
+  allow_credentials=True,
   allow_methods=["*"],
   allow_headers=["*"],
 )
@@ -50,15 +46,6 @@ app.add_middleware(
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
   return {"status": "ok", "service": "api_gateway_local"}
-
-
-@app.get("/v1/dashboard/sample-user")
-async def dashboard_sample_user(claims: dict = Depends(require_auth(settings))):
-  """
-  Convenience endpoint for the frontend: return a user id that exists in the dataset.
-  """
-  headers = {"x-user-id": str(claims.get("sub", "local-user"))}
-  return await _get_json(f"{TX_URL}/v1/banking/sample-user", headers=headers)
 
 
 async def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> Any:

@@ -1,0 +1,59 @@
+## Run project (Windows / PowerShell) — 2 lệnh: 1 lệnh backend + 1 lệnh frontend
+
+### 0) One-time installs
+Email: admin@vbac.com
+Mật khẩu: admin123
+```powershell
+cd "D:\Banking AI Dashboard Design"
+npm install
+
+cd "D:\Banking AI Dashboard Design\backend"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+### 1) Chạy backend (1 lệnh)
+
+Từ repo root:
+
+```powershell
+cd "D:\Banking AI Dashboard Design"
+.\backend\run-all.ps1
+```
+
+(Tuỳ chọn) Nếu bạn muốn dùng npm:
+
+```powershell
+npm run backend
+```
+
+Health checks:
+
+```powershell
+curl.exe -s "http://127.0.0.1:8000/healthz"
+curl.exe -s "http://127.0.0.1:8002/healthz"
+```
+
+### 2) Chạy frontend (1 lệnh)
+
+Tạo/đảm bảo `.env` ở repo root có:
+
+`VITE_API_BASE_URL=http://localhost:8000`
+
+Sau đó:
+
+```powershell
+cd "D:\Banking AI Dashboard Design"
+npm run dev
+```
+
+### Stop backend (1 lệnh)
+
+```powershell
+cd "D:\Banking AI Dashboard Design"
+.\backend\stop-all.ps1
+```
+
+
+

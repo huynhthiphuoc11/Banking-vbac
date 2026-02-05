@@ -4,8 +4,11 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
+    "backend": "powershell -ExecutionPolicy Bypass -File backend\\run-all.ps1",
+    "backend:stop": "powershell -ExecutionPolicy Bypass -File backend\\stop-all.ps1",
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "lint": "vite check"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
